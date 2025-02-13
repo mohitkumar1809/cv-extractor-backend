@@ -6,6 +6,36 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const fs = require("fs");
 
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require("dotenv").config();
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+async function extractDataWithGemini(text) {
+  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+  const prompt = `Extract the following details from this resume:\n
+  - Name
+  - Email
+  - Phone
+  - Skills
+  - totalExperience(years)
+  - Experience (Company, Job Title, Duration)
+  - Education (Degree, University, Year)
+  - Projects (Title, Description)
+
+  Resume Text: ${text}
+
+  Return only the response in JSON format no other text.`;
+
+  const result = await model.generateContent(prompt);
+  const response = result.response.text();
+  let jsonString = response.replace(/```json|```/g, "").trim(); // Remove markdown formatting
+  const jsonObject = JSON.parse(jsonString);
+  return jsonObject
+}
+
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -30,51 +60,51 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Model Schema for MongoDB
 const CVSchema = new mongoose.Schema({
-  name: String,
-  email: String,
-  phone: String,
-  skills: [String],
-  experience: String,
-  rawText: String,
-});
+  Name: String,
+  Email: String,
+  Phone: String,
+  Skills: [String],
+  totalExperience: String,
+  Experience: [
+    {
+      Company: String,
+      JobTitle: String,
+      Duration: String,
+    },
+  ],
+  Education: [
+    {
+      Degree: String,
+      University: String,
+      Year: String,
+    },
+  ],
+  Projects: [
+    {
+      Title: String,
+      Description: String,
+    },
+  ],
+  rawText: String, // Store extracted raw text
+}, { timestamps: true });
+
+// Model Schema for MongoDB
 const CV = mongoose.model("CV", CVSchema);
 
-// Upload & Extract CV API
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    // Read and parse the PDF
     const pdfBuffer = fs.readFileSync(req.file.path);
     const data = await pdfParse(pdfBuffer);
     const extractedText = data.text;
 
-    // Extract structured data
-    const nameMatch = extractedText.match(/(Name|Full Name):?\s*(.+)/i);
-    const emailMatch = extractedText.match(/[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}/);
-    const phoneMatch = extractedText.match(/(\+\d{1,3}[-.\s]?)?\d{10}/);
-    const skillsMatch = extractedText.match(
-      /(Skills|Technologies|Expertise):?\s*(.+)/i
-    );
-    const experienceMatch = extractedText.match(
-      /(Experience|Work History):?\s*(.+)/i
-    );
-
-    const extractedData = {
-      name: nameMatch ? nameMatch[2] : "N/A",
-      email: emailMatch ? emailMatch[0] : "N/A",
-      phone: phoneMatch ? phoneMatch[0] : "N/A",
-      skills: skillsMatch ? skillsMatch[2].split(",").map((s) => s.trim()) : [],
-      experience: experienceMatch ? experienceMatch[2] : "N/A",
-      rawText: extractedText,
-    };
-
-    // Save data to MongoDB
-    const savedCV = await CV.create(extractedData);
-
-    res.json(savedCV);
+    const structuredData = await extractDataWithGemini(extractedText);
+    structuredData.rawText = extractedText;
+    fs.unlinkSync(req.file.path); // Remove file after processing
+     await CV.create({ ...structuredData });
+    res.json(structuredData);
   } catch (error) {
     console.error("Error processing file:", error);
     res.status(500).json({ error: "Error processing file" });

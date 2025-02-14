@@ -7,14 +7,22 @@ const pdfParse = require("pdf-parse");
 const fs = require("fs");
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-require("dotenv").config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const apiKey = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey);
+// const fileManager = new GoogleAIFileManager(apiKey);
 
 async function extractDataWithGemini(text) {
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+  const generationConfig = {
+    temperature: 0.7,
+    topP: 0.95,
+    topK: 40,
+    maxOutputTokens: 8192,
+    responseMimeType: "application/json",
+  };
 
-  const prompt = `Extract the following details from this resume:\n
+  const prompt = `Extract the following details from this resume:\n\n
   - Name
   - Email
   - Phone
@@ -26,21 +34,19 @@ async function extractDataWithGemini(text) {
 
   Resume Text: ${text}
 
-  Return only the response in JSON format no other text.`;
+  Return only the response in JSON format with keys in PascalCase format (e.g., "Name", "Email", "Phone", etc.).`;
 
-  const result = await model.generateContent(prompt);
+  const result = await model.generateContent([{ text: prompt }], generationConfig);
   const response = result.response.text();
-  let jsonString = response.replace(/```json|```/g, "").trim(); // Remove markdown formatting
-  const jsonObject = JSON.parse(jsonString);
-  return jsonObject
+  console.log(response,"sid");
+  let jsonString = response.replace(/```json|```/g, "").trim();
+  return JSON.parse(jsonString);
 }
-
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
@@ -49,10 +55,9 @@ mongoose
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
 
-// Multer Configuration (File Upload)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/"); // Save files in "uploads" folder
+    cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
     cb(null, Date.now() + "-" + file.originalname);
@@ -60,36 +65,38 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const CVSchema = new mongoose.Schema({
-  Name: String,
-  Email: String,
-  Phone: String,
-  Skills: [String],
-  totalExperience: String,
-  Experience: [
-    {
-      Company: String,
-      JobTitle: String,
-      Duration: String,
-    },
-  ],
-  Education: [
-    {
-      Degree: String,
-      University: String,
-      Year: String,
-    },
-  ],
-  Projects: [
-    {
-      Title: String,
-      Description: String,
-    },
-  ],
-  rawText: String, // Store extracted raw text
-}, { timestamps: true });
+const CVSchema = new mongoose.Schema(
+  {
+    Name: String,
+    Email: String,
+    Phone: String,
+    Skills: [String],
+    totalExperience: String,
+    Experience: [
+      {
+        Company: String,
+        JobTitle: String,
+        Duration: String,
+      },
+    ],
+    Education: [
+      {
+        Degree: String,
+        University: String,
+        Year: String,
+      },
+    ],
+    Projects: [
+      {
+        Title: String,
+        Description: String,
+      },
+    ],
+    rawText: String,
+  },
+  { timestamps: true }
+);
 
-// Model Schema for MongoDB
 const CV = mongoose.model("CV", CVSchema);
 
 app.post("/upload", upload.single("file"), async (req, res) => {
@@ -102,16 +109,15 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     const structuredData = await extractDataWithGemini(extractedText);
     structuredData.rawText = extractedText;
-    fs.unlinkSync(req.file.path); // Remove file after processing
-     await CV.create({ ...structuredData });
+    fs.unlinkSync(req.file.path);
+    await CV.create({ ...structuredData });
     res.json(structuredData);
   } catch (error) {
     console.error("Error processing file:", error);
-    res.status(500).json({ error: "Error processing file" });
+    res.status(500).json({ error: "Error extracting data" });
   }
 });
 
-// Get all extracted CVs API
 app.get("/cvs", async (req, res) => {
   try {
     const cvs = await CV.find();
@@ -121,6 +127,5 @@ app.get("/cvs", async (req, res) => {
   }
 });
 
-// Server Listening
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

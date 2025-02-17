@@ -7,10 +7,10 @@ const pdfParse = require("pdf-parse");
 const fs = require("fs");
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const cvModel = require("./models/cv-model");
 
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
-// const fileManager = new GoogleAIFileManager(apiKey);
 
 async function extractDataWithGemini(text) {
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
@@ -36,9 +36,11 @@ async function extractDataWithGemini(text) {
 
   Return only the response in JSON format with keys in PascalCase format (e.g., "Name", "Email", "Phone", etc.).`;
 
-  const result = await model.generateContent([{ text: prompt }], generationConfig);
+  const result = await model.generateContent(
+    [{ text: prompt }],
+    generationConfig
+  );
   const response = result.response.text();
-  console.log(response,"sid");
   let jsonString = response.replace(/```json|```/g, "").trim();
   return JSON.parse(jsonString);
 }
@@ -65,40 +67,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const CVSchema = new mongoose.Schema(
-  {
-    Name: String,
-    Email: String,
-    Phone: String,
-    Skills: [String],
-    totalExperience: String,
-    Experience: [
-      {
-        Company: String,
-        JobTitle: String,
-        Duration: String,
-      },
-    ],
-    Education: [
-      {
-        Degree: String,
-        University: String,
-        Year: String,
-      },
-    ],
-    Projects: [
-      {
-        Title: String,
-        Description: String,
-      },
-    ],
-    rawText: String,
-  },
-  { timestamps: true }
-);
-
-const CV = mongoose.model("CV", CVSchema);
-
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -110,7 +78,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     const structuredData = await extractDataWithGemini(extractedText);
     structuredData.rawText = extractedText;
     fs.unlinkSync(req.file.path);
-    await CV.create({ ...structuredData });
+    await cvModel.create({ ...structuredData });
     res.json(structuredData);
   } catch (error) {
     console.error("Error processing file:", error);
@@ -120,7 +88,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
 app.get("/cvs", async (req, res) => {
   try {
-    const cvs = await CV.find();
+    const cvs = await cvModel.find();
     res.json(cvs);
   } catch (error) {
     res.status(500).json({ error: "Error fetching CVs" });
